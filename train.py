@@ -7,6 +7,7 @@ from datas.my_dataset import ToothDataSet, get_peak_points
 from config.config import get_config
 import os
 import shutil
+from pprint import pprint
 
 import torch.backends.cudnn as cudnn
 cudnn.benchmark = True
@@ -76,19 +77,7 @@ def get_mse(pred_points, gts, indices_valid=None):
     return loss
 
 
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    print("============Config==================")
-    # config
-    config = get_config()
-    from pprint import pprint
-    pprint(config)
-    print("==============================")
-
-    # model
-    model = StackHourglass(config["n_stack"], config["in_dim"], config["n_kp"], config["n_hg_layer"])
-    model.float().to(config["device"])
-
+def train(model, config):
     # loss
     criterion = torch.nn.MSELoss()
     # optimizer
@@ -96,19 +85,21 @@ if __name__ == "__main__":
     lambda1 = lambda e: 0.99 ** (e % 10)  # adjust learning rate for every 10 epochs
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda1])
     # data
-    dataset = ToothDataSet(config["img_dir"], config["label_file"], 256)
+    dataset = ToothDataSet(config["img_dir"], config["label_file"], config["in_dim"])
     n_train = int(config["train_ratio"] * len(dataset))
     n_val = len(dataset) - n_train
     print("data number: {}, train: {}, val: {}".format(len(dataset), n_train, n_val))
     train_dataset, val_dataset = random_split(dataset, [n_train, n_val])
     train_loader = DataLoader(train_dataset, config["batch_size"], True)
     val_loader = DataLoader(val_dataset, config["batch_size"], False)
-
+    # print(config["pre_trained_model"], os.path.isfile(config["pre_trained_model"]))
     if config["pre_trained_model"] != "" and os.path.isfile(config["pre_trained_model"]):
         checkpoint = torch.load(config["pre_trained_model"])
-        start_epoch = checkpoint['epoch']
+        config["start_epoch"] = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
+        print("Load {} successed!".format(config["pre_trained_model"]))
 
+    print("=========Training===========")
     min_loss = 9999999999.0
     for epoch in range(config["start_epoch"], config["epoch_num"]):
         print("Lr:{}".format(optimizer.state_dict()['param_groups'][0]['lr']))
@@ -124,7 +115,7 @@ if __name__ == "__main__":
             # print("outputs: *********** ", outputs.shape)
             last_out = outputs[:, -1] * mask
             target_heatmaps = target_heatmaps * mask
-            loss = criterion(last_out, target_heatmaps)   # just compare last output
+            loss = criterion(last_out, target_heatmaps)  # just compare last output
             loss.backward()
             optimizer.step()
 
@@ -154,5 +145,19 @@ if __name__ == "__main__":
                 is_best = True
                 min_loss = val_loss
 
-        if (epoch+1) % config["save_freq"] == 0 or epoch == config["epoch_num"] - 1:
+        if (epoch + 1) % config["save_freq"] == 0 or epoch == config["epoch_num"] - 1:
             save(model, epoch + 1, config["exp"], is_best=is_best)
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+    print("============Config==================")
+    # config
+    config = get_config()
+    pprint(config)
+    print("==============================")
+
+    # model
+    model = StackHourglass(config["n_stack"], config["in_dim"], config["n_kp"], config["n_hg_layer"])
+    model.float().to(config["device"])
+    train(model, config)
