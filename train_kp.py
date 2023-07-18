@@ -4,6 +4,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader, random_split
 from models.hour_glass import StackHourglass
 from datas.my_dataset import ToothDataSet, get_peak_points
+from config.config import get_config
 import os
 import shutil
 
@@ -44,7 +45,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pt'):
         os.makedirs(basename)
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pt')
+        shutil.copyfile(filename, os.path.join(basename, 'model_best.pt'))
 
 
 def save(model, epoch, exp, is_best=False):
@@ -76,54 +77,48 @@ def get_mse(pred_points, gts, indices_valid=None):
 
 
 if __name__ == "__main__":
-    print("------------")
-    # config
-    # device epoch batchsize  continue
-    device = "cpu"
-    epoch_num = 50
-    save_freq = 10
-    start_epoch = 0
-    batch_size = 4
-    lr = 0.001
-    train_img_dir = r"E:\data\SplitTooth\AddFDIClassAndKeyPoint\keyPoint\black"
-    txt_file = r"E:\data\SplitTooth\AddFDIClassAndKeyPoint\keyPoint\kp_label.txt"
-    train_ratio = 0.9
-    pre_trained_model = "./exp/tooth/checkpoint50.pt"
-
     torch.manual_seed(0)
+    print("============Config==================")
+    # config
+    config = get_config()
+    from pprint import pprint
+    pprint(config)
+    print("==============================")
+
     # model
-    model = StackHourglass(4, 256, 3, 4)
-    model.float().to(device)
+    model = StackHourglass(config["n_stack"], config["in_dim"], config["n_kp"], config["n_hg_layer"])
+    model.float().to(config["device"])
 
     # loss
     criterion = torch.nn.MSELoss()
     # optimizer
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=config["lr"])
     lambda1 = lambda e: 0.99 ** (e % 10)  # adjust learning rate for every 10 epochs
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda1])
     # data
-    dataset = ToothDataSet(train_img_dir, txt_file, 256)
-    n_train = int(train_ratio * len(dataset))
+    dataset = ToothDataSet(config["img_dir"], config["label_file"], 256)
+    n_train = int(config["train_ratio"] * len(dataset))
     n_val = len(dataset) - n_train
     print("data number: {}, train: {}, val: {}".format(len(dataset), n_train, n_val))
     train_dataset, val_dataset = random_split(dataset, [n_train, n_val])
-    train_loader = DataLoader(train_dataset, batch_size, True)
-    val_loader = DataLoader(val_dataset, batch_size, False)
+    train_loader = DataLoader(train_dataset, config["batch_size"], True)
+    val_loader = DataLoader(val_dataset, config["batch_size"], False)
 
-    if pre_trained_model != "":
-        checkpoint = torch.load(pre_trained_model)
+    if config["pre_trained_model"] != "" and os.path.isfile(config["pre_trained_model"]):
+        checkpoint = torch.load(config["pre_trained_model"])
         start_epoch = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
 
-    for epoch in range(start_epoch, epoch_num):
+    min_loss = 9999999999.0
+    for epoch in range(config["start_epoch"], config["epoch_num"]):
         print("Lr:{}".format(optimizer.state_dict()['param_groups'][0]['lr']))
         # train
         model.train()
         for i, (inputs, target_kps, target_heatmaps) in enumerate(train_loader):
             # print(i, inputs.shape, target_kps.shape, target_heatmaps.shape)
-            inputs = Variable(inputs).to(device)
-            target_heatmaps = Variable(target_heatmaps).to(device)
-            mask, indices_valid = calculate_mask(target_heatmaps, device)
+            inputs = Variable(inputs).to(config["device"])
+            target_heatmaps = Variable(target_heatmaps).to(config["device"])
+            mask, indices_valid = calculate_mask(target_heatmaps, config["device"])
             optimizer.zero_grad()
             outputs = model(inputs)
             # print("outputs: *********** ", outputs.shape)
@@ -140,13 +135,14 @@ if __name__ == "__main__":
 
         # val
         model.eval()
+        is_best = False
         with torch.no_grad():
             val_loss = 0.0
 
             for i, (inputs, target_kps, target_heatmaps) in enumerate(val_loader):
-                inputs = Variable(inputs).to(device)
-                target_heatmaps = Variable(target_heatmaps).to(device)
-                mask, indices_valid = calculate_mask(target_heatmaps, device)
+                inputs = Variable(inputs).to(config["device"])
+                target_heatmaps = Variable(target_heatmaps).to(config["device"])
+                mask, indices_valid = calculate_mask(target_heatmaps, config["device"])
                 outputs = model(inputs)
                 # print("outputs: *********** ", outputs.shape)
                 all_peak_points = get_peak_points(outputs[:, -1].cpu().data.numpy())
@@ -154,6 +150,9 @@ if __name__ == "__main__":
 
             val_loss /= len(val_loader)
             print('******* val  loss : {:15} '.format(val_loss))
+            if val_loss < min_loss:
+                is_best = True
+                min_loss = val_loss
 
-        if (epoch+1) % save_freq == 0 or epoch == epoch_num - 1:
-            save(model, epoch + 1, "tooth", is_best=False)
+        if (epoch+1) % config["save_freq"] == 0 or epoch == config["epoch_num"] - 1:
+            save(model, epoch + 1, config["exp"], is_best=is_best)
