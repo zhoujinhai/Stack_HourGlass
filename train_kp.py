@@ -124,12 +124,12 @@ if __name__ == "__main__":
             inputs = Variable(inputs).to(device)
             target_heatmaps = Variable(target_heatmaps).to(device)
             mask, indices_valid = calculate_mask(target_heatmaps, device)
-            # print(mask.shape, indices_valid)
             optimizer.zero_grad()
-            outputs = model(inputs) * mask
+            outputs = model(inputs)
             # print("outputs: *********** ", outputs.shape)
+            last_out = outputs[:, -1] * mask
             target_heatmaps = target_heatmaps * mask
-            loss = criterion(outputs[:, -1], target_heatmaps)   # just compare last output
+            loss = criterion(last_out, target_heatmaps)   # just compare last output
             loss.backward()
             optimizer.step()
 
