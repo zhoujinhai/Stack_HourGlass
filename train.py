@@ -1,3 +1,6 @@
+import os
+import shutil
+from pprint import pprint
 import torch
 import torch.optim as optim
 from torch.autograd import Variable
@@ -5,9 +8,7 @@ from torch.utils.data import DataLoader, random_split
 from models.hour_glass import StackHourglass
 from datas.my_dataset import ToothDataSet, get_peak_points
 from config.config import get_config
-import os
-import shutil
-from pprint import pprint
+from visualizer.writer import Writer
 
 import torch.backends.cudnn as cudnn
 cudnn.benchmark = True
@@ -50,7 +51,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pt'):
 
 
 def save(model, epoch, exp, is_best=False):
-    resume = os.path.join('exp', exp)
+    resume = os.path.join('./exp', exp)
     resume_file = os.path.join(resume, 'checkpoint.pt')
 
     save_checkpoint({
@@ -77,7 +78,13 @@ def get_mse(pred_points, gts, indices_valid=None):
     return loss
 
 
-def train(model, config):
+def train(config):
+    # writer
+    writer = Writer(config)
+
+    # model
+    model = StackHourglass(config["n_stack"], config["in_dim"], config["n_kp"], config["n_hg_layer"])
+    model.float().to(config["device"])
     # loss
     criterion = torch.nn.MSELoss()
     # optimizer
@@ -97,7 +104,7 @@ def train(model, config):
         checkpoint = torch.load(config["pre_trained_model"])
         config["start_epoch"] = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
-        print("Load {} successed!".format(config["pre_trained_model"]))
+        print("Load {} successed!, start epoch{}".format(config["pre_trained_model"], checkpoint['epoch']))
 
     print("=========Training===========")
     min_loss = 9999999999.0
@@ -118,11 +125,11 @@ def train(model, config):
             loss = criterion(last_out, target_heatmaps)  # just compare last output
             loss.backward()
             optimizer.step()
-
+            writer.plot_train_loss(loss, epoch, i, len(train_loader))
             print('[ Train Epoch {:005d} -> {:005d} / {} ] loss : {:15} '.format(
                 epoch, i, len(train_loader), loss.item()))
 
-        scheduler.step()
+        scheduler.step()  # update learning rate
 
         # val
         model.eval()
@@ -145,8 +152,14 @@ def train(model, config):
                 is_best = True
                 min_loss = val_loss
 
+            writer.plot_val_loss(val_loss, epoch)
+
+        # save
         if (epoch + 1) % config["save_freq"] == 0 or epoch == config["epoch_num"] - 1:
             save(model, epoch + 1, config["exp"], is_best=is_best)
+            writer.plot_model_wts(model, epoch)
+
+    writer.close()
 
 
 if __name__ == "__main__":
@@ -157,7 +170,5 @@ if __name__ == "__main__":
     pprint(config)
     print("==============================")
 
-    # model
-    model = StackHourglass(config["n_stack"], config["in_dim"], config["n_kp"], config["n_hg_layer"])
-    model.float().to(config["device"])
-    train(model, config)
+    # train
+    train(config)
