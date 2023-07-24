@@ -89,7 +89,7 @@ def train(config):
     criterion = torch.nn.MSELoss()
     # optimizer
     optimizer = optim.Adam(model.parameters(), lr=config["lr"])
-    lambda1 = lambda e: 0.99 ** (e / 10)  # adjust learning rate for every 10 epochs
+    lambda1 = lambda e: 0.99 ** (e / 10)  # adjust learning rate 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda1])
     # data
     dataset = ToothDataSet(config["img_dir"], config["label_file"], config["in_dim"])
