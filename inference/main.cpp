@@ -11,7 +11,8 @@ int main(int argc, char* argv[])
 {
 	int testTimes = 100;
 	const std::string testImgPath = "E:/data/SplitTooth/AddFDIClassAndKeyPoint/keyPoint/black/1 (1)_top_black_flip.png";
-	 
+
+	// OpenCV Inference
 	const std::string onnxPath = "E:/code/Server223/hourglass-tooth/exp/tooth/model_convert/checkpoint_sim.onnx";
 	KeyPointCV kpCV;
 	KPOption opt;
@@ -30,7 +31,8 @@ int main(int argc, char* argv[])
 	auto durationCV = std::chrono::duration_cast<std::chrono::microseconds>(endCV - startCV);
 	std::cout << "cv predict 100 times spend: " << double(durationCV.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << " s!" << std::endl;
 	kpCV.Clear();
-	 
+
+	// NCNN Inference
 	const std::string allBin = "E:/code/Server223/hourglass-tooth/exp/tooth/model_convert/checkpoint_sim_all.bin";
 	KeyPoint KP;
 	KPOption optNN;
