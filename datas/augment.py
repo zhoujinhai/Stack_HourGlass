@@ -1,9 +1,10 @@
- # ref: https://albumentations.ai/docs/getting_started/installation/
+# ref: https://albumentations.ai/docs/getting_started/installation/
 
 import albumentations as A
 import cv2
 from PIL import Image
 import numpy as np
+import random
 
 
 # 分类
@@ -46,9 +47,129 @@ tf_kp = A.Compose([
     A.RandomBrightnessContrast(p=0.2),  # 亮度和对比度随机增强
 ], keypoint_params=A.KeypointParams(format='xy', label_fields=['class_labels']))
 
+
 # ref: yolov5: https://github.com/ultralytics/yolov5/blob/master/utils/augmentations.py
 # https://github.com/ultralytics/yolov5/blob/master/utils/dataloaders.py
 # mosaic
+# 大致流程： 先预定一个2*2的图片, 划分由中心点确定, center在(0.5*size, 1.5*size)之间
+#          按照左上、右上、右下、左下进行裁剪, 最后对标签进行相关处理
+def mosaic(out_h, out_w, imgs, bboxes=None, classes=None, masks=None, kps=None):
+    """
+    Arrange the images in a 2x2 grid. Images can have different shape. And Deal the labels.
+    Args:
+        out_h:(int) The height of output.
+        out_w:(int) The width of output.
+        imgs:(List[np.ndarray]) The input images, it have 4 single image.
+        bboxes:(List[List[np.ndarray]]) The boxes infos for every image.
+        classes:(List[List[str]]) The class name for every boxes.
+        masks:(List[List[np.ndarray]]) The mask info for every image.
+        kps:(List[List[np.ndarray]]) The keypoints for every image.
+
+    Returns:
+        the output is image and label after mosaic operator.
+    """
+    if len(imgs) != 4:
+        raise ValueError(f"Length of image_batch should be 4. Got {len(imgs)}")
+
+    mosaic_border = [out_h // 2, out_w // 2]
+    print(mosaic_border)
+    yc, xc = (int(random.uniform(0.8 * bd, 1.2 * bd)) for bd in mosaic_border)  # mosaic center [0.4, 0.6]
+    print("xc: ", xc, "yc: ", yc)
+    indices = [0, 1, 2, 3]
+    random.shuffle(indices)
+    print(indices)
+    if len(imgs[0].shape) == 2:
+        out_shape = [out_h, out_w]
+    else:
+        out_shape = [out_h, out_w, imgs[0].shape[2]]
+    img4 = np.full(out_shape, 0, dtype=np.uint8)  # base image with 4 tiles
+    print(img4.shape)
+
+    boxes4, masks4, kps4, cls4 = [], [], [], []
+    if masks is not None:
+        masks4 = np.full((out_h, out_w), 0, dtype=np.uint8)
+
+    for i, index in enumerate(indices):
+        # place img in img4
+        img = imgs[index]
+        h, w = img.shape[:2]
+        x1a, y1a, x2a, y2a, x1b, y1b, x2b, y2b, x_offset, y_offset = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        if i == 0:  # top left
+            x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+            x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            x_offset = 0
+            y_offset = 0
+        elif i == 1:  # top right
+            x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, out_w), yc
+            x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            x_offset = xc
+            y_offset = 0
+        elif i == 2:  # bottom left
+            x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(out_h, yc + h)
+            x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            x_offset = 0
+            y_offset = yc
+        elif i == 3:  # bottom right
+            x1a, y1a, x2a, y2a = xc, yc, min(xc + w, out_w), min(out_h, yc + h)
+            x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            x_offset = xc
+            y_offset = yc
+
+        img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+
+        # label
+        if bboxes is not None and classes is not None:
+            print("=====", bboxes)
+            boxes = bboxes[index]
+            class_names = classes[index]
+            tf = A.Compose([
+                A.Crop(x1b, y1b, x2b, y2b)
+            ], bbox_params=A.BboxParams(format="coco", label_fields=["class_labels"]))
+
+            img_crop = tf(image=img, bboxes=boxes, class_labels=class_names)
+            crop_boxes = img_crop["bboxes"]
+            crop_class = img_crop["class_labels"]
+            if len(crop_class) > 0:
+                boxes4.extend(np.add(crop_boxes, [x_offset, y_offset, 0, 0]))
+                cls4.extend(crop_class)
+
+        # mask
+        if masks is not None and classes is not None:
+            mask = masks[index]
+            masks4[y1a:y2a, x1a:x2a] = mask[y1b:y2b, x1b:x2b]
+            class_names = classes[index]
+            tf = A.Compose([
+                A.Crop(x1b, y1b, x2b, y2b)
+            ], bbox_params=A.BboxParams(format="coco", label_fields=["class_labels"]))
+
+            w = mask.shape[1]
+            h = mask.shape[0]
+            single_masks = np.zeros((np.max(mask), h, w), dtype=np.uint8)
+            for n in range(np.max(mask)):
+                single_masks[n, :, :][mask == n + 1] = 1
+            temp_bboxes = [cv2.boundingRect(cv2.findNonZero(temp_mask)) for temp_mask in single_masks]
+            img_crop = tf(image=img, mask=mask, bboxes=temp_bboxes, class_labels=class_names)
+            crop_boxes = img_crop["bboxes"]
+            crop_class = img_crop["class_labels"]
+            if len(crop_class) > 0:
+                boxes4.extend(np.add(crop_boxes, [x_offset, y_offset, 0, 0]))
+                cls4.extend(crop_class)
+
+        # kps
+        if kps is not None and classes is not None:
+            tf = A.Compose([
+                A.Crop(x1b, y1b, x2b, y2b)
+            ], keypoint_params=A.KeypointParams(format='xy', label_fields=['class_labels']))
+            keypoint = kps[index]
+            kp_names = classes[index]
+            img_crop = tf(image=img, keypoints=keypoint, class_labels=kp_names)
+            crop_kps = img_crop["keypoints"]
+            crop_labels = img_crop["class_labels"]
+            if len(crop_labels) > 0:
+                kps4.extend(np.add(img_crop["keypoints"], [x_offset, y_offset]))
+                cls4.extend(img_crop["class_labels"])
+
+    return img4, cls4, boxes4, masks4, kps4
 
 
 def show_aug_img_cv(cv_img, b_convert=True):
@@ -180,19 +301,73 @@ if __name__ == "__main__":
     # seg_aug_labels = seg_tf["class_labels"]
     # show_aug_img_pil(seg_aug_mask)
     # print(seg_aug_labels)
+    #
+    # # 将mask拆成单个mask
+    # aug_masks = np.zeros((mask_number, seg_aug_mask.shape[0], seg_aug_mask.shape[1]), dtype=np.uint8)
+    # for n in range(mask_number):
+    #     aug_masks[n, :, :][seg_aug_mask == n + 1] = 1
+    #     if np.max(aug_masks[n, :, :]) > 0:
+    #         show_aug_img_pil(aug_masks[n, :, :])
+    #         print(label_names[n])
 
-    # ==========keypoint==========
-    kp_img_path = r"D:\data\aug\classify.png"
-    kps = [(643.47, 87.50), (329.78, 505.36), (63.71, 48.81), (357.76, 264.29)]
-    kp_names = ["L", "M", "R", "C"]
+    # # ==========keypoint==========
+    # kp_img_path = r"D:\data\aug\classify.png"
+    # kps = [(643.47, 87.50), (329.78, 505.36), (63.71, 48.81), (357.76, 264.29)]
+    # kp_names = ["L", "M", "R", "C"]
+    #
+    # kp_img = cv2.imread(kp_img_path)
+    # kp_img = cv2.cvtColor(kp_img, cv2.COLOR_RGB2BGR)
+    # show_img_kps(kp_img, kps, kp_names)
+    # print(tf_kp)
+    # kp_tf = tf_kp(image=kp_img, keypoints=kps, class_labels=kp_names)
+    # kp_aug_img = kp_tf["image"]
+    # kp_aug_kps = kp_tf["keypoints"]
+    # kp_aug_labels = kp_tf["class_labels"]
+    # print(kp_aug_labels)
+    # show_img_kps(kp_aug_img, kp_aug_kps, kp_aug_labels)
 
-    kp_img = cv2.imread(kp_img_path)
-    kp_img = cv2.cvtColor(kp_img, cv2.COLOR_RGB2BGR)
-    show_img_kps(kp_img, kps, kp_names)
+    # ==========mosaic==========
+    # ref: https://github.com/mljack/albumentations_mosaic/commit/886e3e8b0d37889481fff30acdff358edda14a65
+    # ref: yolov5/utils/dataloaders.py ==> load_mosaic()
+    # 思路: 先预定一个2*2网格图片, 中心点预留在（0.5*size, 1.5*size之间）, 然后计算各个图片的大小及维度并进行裁剪, 对标签进行处理
 
-    kp_tf = tf_kp(image=kp_img, keypoints=kps, class_labels=kp_names)
-    kp_aug_img = kp_tf["image"]
-    kp_aug_kps = kp_tf["keypoints"]
-    kp_aug_labels = kp_tf["class_labels"]
-    print(kp_aug_labels)
-    show_img_kps(kp_aug_img, kp_aug_kps, kp_aug_labels)
+    test_img_path = r"D:\data\aug\classify.png"
+    test_img_path2 = "D:/data/aug/detect.jpg"
+    img1 = cv2.imread(test_img_path)
+    img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+    img2 = cv2.imread(test_img_path2)
+    img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+    # # box
+    # boxes = [[20.07, 185.64, 169.81, 208.42], [473.05, 96.53, 165.95, 244.47]]
+    # class_names = ["cat", "dog"]
+    # batch_imgs = [img2, img2, img2, img2]
+    # batch_class_names = [class_names] * 4
+    # batch_boxes = [boxes] * 4
+    # aug_img, aug_cls, aug_boxes, aug_masks, aug_kps = \
+    #     mosaic(600, 700, batch_imgs, bboxes=batch_boxes, classes=batch_class_names)
+    # show_img_box(aug_img, aug_boxes, aug_cls)
+
+    # masks
+    mask_path = "D:/data/aug/seg/label.png"
+    mask = np.array(Image.open(mask_path))
+    label_names = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "R1", "R2", "R3", "R4", "R5", "R6", "R7"]
+
+    batch_imgs = [img1, img1, img1, img1]
+    batch_masks = [mask, mask, mask, mask]
+    batch_class_names = [label_names] * 4
+    aug_img, aug_cls, aug_boxes, aug_masks, aug_kps = \
+        mosaic(600, 700, batch_imgs, masks=batch_masks, classes=batch_class_names)
+    show_img_box(aug_img, aug_boxes, aug_cls)
+    show_aug_img_pil(aug_masks)
+    print("aug_cls: ", aug_cls)
+
+    # # kps
+    # kps = [(643.47, 87.50), (329.78, 505.36), (63.71, 48.81), (357.76, 264.29)]
+    # kp_names = ["L", "M", "R", "C"]
+    # batch_imgs = [img1, img1, img1, img1]
+    # batch_class_names = [kp_names] * 4
+    # batch_kps = [kps] * 4
+    # print(batch_kps)
+    # aug_img, aug_cls, aug_boxes, aug_masks, aug_kps = \
+    #     mosaic(600, 700, batch_imgs, kps=batch_kps, classes=batch_class_names)
+    # show_img_kps(aug_img, aug_kps, aug_cls)
