@@ -92,7 +92,7 @@ def train(config):
     lambda1 = lambda e: 0.99 ** (e / 10)  # adjust learning rate 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda1])
     # data
-    dataset = ToothDataSet(config["img_dir"], config["label_file"], config["in_dim"])
+    dataset = ToothDataSet(config["img_dir"], config["label_file"], config["in_dim"], config["out_dim"], config["n_kp"])
     n_train = int(config["train_ratio"] * len(dataset))
     n_val = len(dataset) - n_train
     print("data number: {}, train: {}, val: {}".format(len(dataset), n_train, n_val))
