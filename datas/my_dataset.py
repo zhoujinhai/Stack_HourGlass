@@ -333,6 +333,10 @@ class ToothDataSet(Dataset):
             img = cv_to_pil(cropped_img)
             ori_kps = cropped_pts
         w, h = img.size
+        # need judge kps whether outer of the image
+        for i in range(len(self.keypoints[idx])):
+            if ori_kps[i][0] < 0 || ori_kps[i][0] >= w || ori_kps[i][1] < 0 || ori_kps[i][1] >= h:
+                self.visibles[idx][i] = 0
         kps = []
         w_ratio = self.img_size / w
         h_ratio = self.img_size / h
