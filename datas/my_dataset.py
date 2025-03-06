@@ -335,7 +335,7 @@ class ToothDataSet(Dataset):
         w, h = img.size
         # need judge kps whether outer of the image
         for i in range(len(self.keypoints[idx])):
-            if ori_kps[i][0] < 0 || ori_kps[i][0] >= w || ori_kps[i][1] < 0 || ori_kps[i][1] >= h:
+            if ori_kps[i][0] < 0 or ori_kps[i][0] >= w or ori_kps[i][1] < 0 or ori_kps[i][1] >= h:
                 self.visibles[idx][i] = 0
         kps = []
         w_ratio = self.img_size / w
